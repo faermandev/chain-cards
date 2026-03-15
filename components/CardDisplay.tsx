@@ -1,6 +1,7 @@
 'use client';
 
 import type { CardStats } from '@/lib/contracts/cardRegistry';
+import Image from 'next/image';
 
 const ELEMENT_CONFIG: Record<
   number,
@@ -50,6 +51,31 @@ const ELEMENT_CONFIG: Record<
   },
 };
 
+function elementFromCardId(cardId: bigint): number | null {
+  const n = Number(cardId);
+  if (!Number.isSafeInteger(n)) return null;
+  if (n >= 1 && n <= 3) return 0; // fire
+  if (n >= 4 && n <= 6) return 1; // water
+  if (n >= 7 && n <= 9) return 2; // grass
+  if (n >= 10 && n <= 12) return 3; // rock
+  if (n >= 13 && n <= 15) return 4; // electric
+  if (n >= 16 && n <= 18) return 5; // ice
+  return null;
+}
+
+function imageForCardId(cardId: bigint): string | null {
+  const n = Number(cardId);
+  if (!Number.isSafeInteger(n)) return null;
+
+  if (n >= 1 && n <= 3) return `/images/fire${((n - 1) % 3) + 1}.png`;
+  if (n >= 4 && n <= 6) return `/images/water${((n - 4) % 3) + 1}.png`;
+  if (n >= 7 && n <= 9) return `/images/grass${((n - 7) % 3) + 1}.png`;
+  if (n >= 10 && n <= 12) return `/images/rock${((n - 10) % 3) + 1}.png`;
+  if (n >= 13 && n <= 15) return `/images/eletric${((n - 13) % 3) + 1}.png`;
+  if (n >= 16 && n <= 18) return `/images/ice${((n - 16) % 3) + 1}.png`;
+  return null;
+}
+
 interface CardDisplayProps {
   cardId: bigint;
   exists?: boolean;
@@ -84,7 +110,9 @@ export default function CardDisplay({
   disabled,
   roundLabel,
 }: CardDisplayProps) {
-  const element = stats ? Number(stats.element) : null;
+  const elementOverride = elementFromCardId(cardId);
+  const element = stats ? Number(stats.element) : elementOverride;
+  const imageSrc = imageForCardId(cardId);
   const cfg =
     element !== null && ELEMENT_CONFIG[element]
       ? ELEMENT_CONFIG[element]
@@ -119,6 +147,18 @@ export default function CardDisplay({
       {selected && (
         <div className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold">
           ✓
+        </div>
+      )}
+
+      {imageSrc && (
+        <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-lg border border-white/10 bg-black/20">
+          <Image
+            src={imageSrc}
+            alt={`${cfg.label} card ${cardId.toString()}`}
+            fill
+            sizes="(max-width: 640px) 120px, 160px"
+            className="object-cover"
+          />
         </div>
       )}
 
