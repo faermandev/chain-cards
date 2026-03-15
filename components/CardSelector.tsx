@@ -3,8 +3,10 @@
 import CardDisplay from './CardDisplay';
 import { useCardRegistryAddress } from '@/lib/contracts/duelGame';
 import { CARDREGISTRY_ABI } from '@/lib/contracts/cardRegistry';
-import { useReadContracts } from 'wagmi';
-import type { Address } from 'viem';
+import { useEffect, useMemo, useState } from 'react';
+import { useChainId, usePublicClient, useReadContracts } from 'wagmi';
+import type { AbiEvent, Address } from 'viem';
+import { getCardRegistryFromBlock } from '@/lib/contracts/fromBlocks';
 
 type TupleLike = Record<string, unknown> & { [index: number]: unknown };
 
@@ -33,7 +35,7 @@ const DEFAULT_CARDS = [1n, 2n, 3n, 4n, 5n] as const;
 
 export default function CardSelector({
   rounds,
-  cards = [...DEFAULT_CARDS],
+  cards,
   selected,
   onChange,
   activeRound,
@@ -41,11 +43,87 @@ export default function CardSelector({
 }: CardSelectorProps) {
   const registryRead = useCardRegistryAddress();
   const cardRegistry = registryRead.data as Address | undefined;
+  const chainId = useChainId();
+  const publicClient = usePublicClient();
+
+  const [discoveredCards, setDiscoveredCards] = useState<bigint[] | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+
+  const effectiveCards = useMemo(() => {
+    if (cards && cards.length > 0) return cards;
+    if (discoveredCards && discoveredCards.length > 0) return discoveredCards;
+    return [...DEFAULT_CARDS];
+  }, [cards, discoveredCards]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (!cardRegistry || !publicClient) return;
+      setDiscoveryError(null);
+
+      try {
+        const abiItems = CARDREGISTRY_ABI as unknown as readonly { type?: string; name?: string }[];
+        const event = abiItems.find(
+          (x): x is AbiEvent => x.type === 'event' && x.name === 'CardTypeCreated',
+        );
+
+        if (!event) throw new Error('CardTypeCreated event not found in ABI.');
+
+        const latest = await publicClient.getBlockNumber();
+        const explicitFrom = getCardRegistryFromBlock(chainId);
+        if (explicitFrom === undefined && chainId !== 31337) {
+          throw new Error(
+            `RPC limits eth_getLogs to small block ranges on this network. Set NEXT_PUBLIC_CARDREGISTRY_FROM_BLOCK_${chainId} to the CardRegistry deployment block to enable full discovery.`,
+          );
+        }
+
+        const fromBlock = explicitFrom ?? 0n;
+        const chunkSize = chainId === 31337 ? 50_000n : 100n; // Monad RPC: 100-block getLogs window
+
+        const logs: unknown[] = [];
+        for (let start = fromBlock; start <= latest; start += chunkSize) {
+          if (cancelled) return;
+          const end = start + chunkSize - 1n;
+          const toBlock = end > latest ? latest : end;
+          const chunk = await publicClient.getLogs({
+            address: cardRegistry,
+            event,
+            fromBlock: start,
+            toBlock,
+          });
+          logs.push(...chunk);
+
+          // Tiny delay to avoid hammering rate limits
+          if (chainId !== 31337) {
+            await new Promise((r) => setTimeout(r, 15));
+          }
+        }
+
+        const ids = Array.from(
+          new Set(
+            logs
+              .map((l) => (l as { args?: { cardId?: bigint } }).args?.cardId)
+              .filter((v): v is bigint => typeof v === 'bigint'),
+          ),
+        ).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+        if (!cancelled) setDiscoveredCards(ids.length > 0 ? ids : null);
+      } catch (err) {
+        if (cancelled) return;
+        setDiscoveredCards(null);
+        setDiscoveryError((err as Error).message);
+      }
+    }
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [cardRegistry, chainId, publicClient]);
 
   const existsReads = useReadContracts({
     allowFailure: true,
     contracts: cardRegistry
-      ? cards.map((cardId) => ({
+      ? effectiveCards.map((cardId) => ({
           address: cardRegistry,
           abi: CARDREGISTRY_ABI,
           functionName: 'cardExists' as const,
@@ -58,7 +136,7 @@ export default function CardSelector({
   const statsReads = useReadContracts({
     allowFailure: true,
     contracts: cardRegistry
-      ? cards.map((cardId) => ({
+      ? effectiveCards.map((cardId) => ({
           address: cardRegistry,
           abi: CARDREGISTRY_ABI,
           functionName: 'getCardStats' as const,
@@ -117,7 +195,7 @@ export default function CardSelector({
           <span className="text-white font-medium">{roundLabels[activeRound]}</span>
         </p>
         <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
-          {cards.map((cardId, idx) => {
+          {effectiveCards.map((cardId, idx) => {
             const isSelectedHere = selected[activeRound] === cardId;
             const isUsedElsewhere = selected.some((s, i) => s === cardId && i !== activeRound);
             const exists = existsReads.data?.[idx]?.result as boolean | undefined;
@@ -135,6 +213,16 @@ export default function CardSelector({
             );
           })}
         </div>
+        {discoveryError && (
+          <div className="mt-4 rounded-xl border border-gray-800 bg-gray-900 p-4 text-xs text-gray-400">
+            Could not discover all cards from events. Showing fallback list. Details: {discoveryError}
+          </div>
+        )}
+        {!cards && !discoveredCards && !discoveryError && (
+          <div className="mt-4 rounded-xl border border-gray-800 bg-gray-900 p-4 text-xs text-gray-400">
+            Discovering card types from CardRegistry events…
+          </div>
+        )}
       </div>
     </div>
   );

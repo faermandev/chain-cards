@@ -88,6 +88,12 @@ export default function BetPage({ params }: { params: Promise<{ id: string }> })
     allowanceRead.data !== undefined &&
     (allowanceRead.data as bigint) < stake;
 
+  useEffect(() => {
+    if (!approve.isSuccess) return;
+    allowanceRead.refetch();
+    balanceRead.refetch();
+  }, [allowanceRead, approve.isSuccess, balanceRead]);
+
   const insufficientBalance =
     stake !== undefined && balanceRead.data !== undefined && (balanceRead.data as bigint) < stake;
 
@@ -265,12 +271,18 @@ export default function BetPage({ params }: { params: Promise<{ id: string }> })
 
                 {needsApprove && duelGameAddress && stake !== undefined && (
                   <button
+                    type="button"
                     onClick={() => approve.approve(duelGameAddress, stake)}
                     disabled={approve.isPending || approve.isConfirming}
                     className="w-full rounded-xl py-3 font-bold text-white transition-colors bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     {approve.isPending || approve.isConfirming ? 'Approving…' : 'Approve stake'}
                   </button>
+                )}
+                {approve.error && (
+                  <p className="text-sm text-red-400">
+                    Approve failed: {(approve.error as Error).message}
+                  </p>
                 )}
 
                 <button

@@ -100,6 +100,12 @@ export default function CreateBetPage() {
     allowance < stakeUnits;
 
   useEffect(() => {
+    if (!approve.isSuccess) return;
+    allowanceRead.refetch();
+    balanceRead.refetch();
+  }, [allowanceRead, approve.isSuccess, balanceRead]);
+
+  useEffect(() => {
     setSelected(Array.from({ length: rounds }, () => null));
     setActiveRound(0);
   }, [rounds]);
@@ -327,12 +333,18 @@ export default function CreateBetPage() {
 
           {needsApprove && duelGameAddress && stakeUnits !== null && (
             <button
+              type="button"
               onClick={() => approve.approve(duelGameAddress, stakeUnits)}
               disabled={approve.isPending || approve.isConfirming}
               className="w-full rounded-xl py-3 font-bold text-white transition-colors bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {approve.isPending || approve.isConfirming ? 'Approving…' : `Approve ${stakeInput} ${symbol}`}
             </button>
+          )}
+          {approve.error && (
+            <p className="text-sm text-red-400">
+              Approve failed: {(approve.error as Error).message}
+            </p>
           )}
 
           <button
