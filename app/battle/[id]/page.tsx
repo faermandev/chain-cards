@@ -9,8 +9,45 @@ import { useClaimForfeit, useGetMatchInfo, useReveal, useStakeToken } from '@/li
 import { useErc20Decimals, useErc20Symbol } from '@/lib/contracts/erc20';
 import { deleteSecret, exportSecretJson, importSecretJson, loadSecret } from '@/lib/duel/secrets';
 import { validateLineup, validateSalt32 } from '@/lib/duel/commit';
-import { formatUnits, type Address } from 'viem';
-import { useChainId } from 'wagmi';
+import { formatUnits, type AbiEvent, type Address, type PublicClient } from 'viem';
+import { useChainId, usePublicClient } from 'wagmi';
+import { DUELGAME_ABI } from '@/lib/contracts/duelGame';
+import { getDuelGameAddress } from '@/lib/contracts/addresses';
+import { getDuelGameFromBlock } from '@/lib/contracts/fromBlocks';
+
+function shortAddr(addr: string) {
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+function getEventByName(abi: unknown, name: string): AbiEvent | null {
+  if (!Array.isArray(abi)) return null;
+  const items = abi as readonly { type?: string; name?: string }[];
+  const found = items.find((x) => x.type === 'event' && x.name === name);
+  return (found as AbiEvent | undefined) ?? null;
+}
+
+async function getLogsInChunks(params: {
+  publicClient: PublicClient;
+  address: Address;
+  event: AbiEvent;
+  fromBlock: bigint;
+  toBlock: bigint;
+  chunkSize: bigint;
+}) {
+  const out: unknown[] = [];
+  for (let start = params.fromBlock; start <= params.toBlock; start += params.chunkSize) {
+    const end = start + params.chunkSize - 1n;
+    const toBlock = end > params.toBlock ? params.toBlock : end;
+    const chunk = await params.publicClient.getLogs({
+      address: params.address,
+      event: params.event,
+      fromBlock: start,
+      toBlock,
+    });
+    out.push(...chunk);
+  }
+  return out;
+}
 
 export default function BattlePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -29,6 +66,7 @@ export default function BattlePage({ params }: { params: Promise<{ id: string }>
   const { matchInfo, addressError } = useGetMatchInfo(matchId ?? undefined);
   const reveal = useReveal();
   const forfeit = useClaimForfeit();
+  const publicClient = usePublicClient();
 
   const stakeTokenRead = useStakeToken();
   const stakeToken = stakeTokenRead.data as Address | undefined;
@@ -40,6 +78,15 @@ export default function BattlePage({ params }: { params: Promise<{ id: string }>
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
   const [secretJsonInput, setSecretJsonInput] = useState('');
   const [error, setError] = useState('');
+  const [resolution, setResolution] = useState<{
+    winner: Address;
+    winsCreator?: number;
+    winsOpponent?: number;
+    draws?: number;
+    pot?: bigint;
+    kind: 'matchResolved' | 'forfeit';
+  } | null>(null);
+  const [resolutionError, setResolutionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isConnected) router.replace('/');
@@ -49,6 +96,121 @@ export default function BattlePage({ params }: { params: Promise<{ id: string }>
     const t = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Load winner/result from events (getMatchInfo doesn't expose it)
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (!publicClient || matchId === null) return;
+      setResolutionError(null);
+
+      let duelGameAddress: Address;
+      try {
+        duelGameAddress = getDuelGameAddress(chainId);
+      } catch (e) {
+        setResolution(null);
+        setResolutionError((e as Error).message);
+        return;
+      }
+
+      const fromBlock = getDuelGameFromBlock(chainId);
+      if (fromBlock === undefined && chainId !== 31337) {
+        setResolution(null);
+        setResolutionError(
+          `Set NEXT_PUBLIC_DUELGAME_FROM_BLOCK_${chainId} to enable winner lookup on this RPC.`,
+        );
+        return;
+      }
+
+      const matchResolved = getEventByName(DUELGAME_ABI, 'MatchResolved');
+      const forfeitClaimed = getEventByName(DUELGAME_ABI, 'ForfeitClaimed');
+      if (!matchResolved || !forfeitClaimed) {
+        setResolution(null);
+        setResolutionError('DuelGame ABI missing MatchResolved/ForfeitClaimed events.');
+        return;
+      }
+
+      try {
+        const latest = await publicClient.getBlockNumber();
+        const start = fromBlock ?? 0n;
+        const chunkSize = chainId === 31337 ? 50_000n : 100n;
+
+        const logsResolved = await getLogsInChunks({
+          publicClient: publicClient as PublicClient,
+          address: duelGameAddress,
+          event: matchResolved,
+          fromBlock: start,
+          toBlock: latest,
+          chunkSize,
+        });
+
+        const resolvedForMatch = logsResolved.filter((l) => {
+          const args = (l as { args?: { matchId?: bigint } }).args;
+          return args?.matchId === matchId;
+        });
+        const lastResolved = resolvedForMatch[resolvedForMatch.length - 1] as
+          | {
+              args?: {
+                winner?: Address;
+                winsCreator?: bigint;
+                winsOpponent?: bigint;
+                draws?: bigint;
+                pot?: bigint;
+              };
+            }
+          | undefined;
+
+        if (lastResolved?.args?.winner) {
+          if (!cancelled) {
+            setResolution({
+              kind: 'matchResolved',
+              winner: lastResolved.args.winner,
+              winsCreator: lastResolved.args.winsCreator ? Number(lastResolved.args.winsCreator) : undefined,
+              winsOpponent: lastResolved.args.winsOpponent ? Number(lastResolved.args.winsOpponent) : undefined,
+              draws: lastResolved.args.draws ? Number(lastResolved.args.draws) : undefined,
+              pot: lastResolved.args.pot,
+            });
+          }
+          return;
+        }
+
+        const logsForfeit = await getLogsInChunks({
+          publicClient: publicClient as PublicClient,
+          address: duelGameAddress,
+          event: forfeitClaimed,
+          fromBlock: start,
+          toBlock: latest,
+          chunkSize,
+        });
+
+        const forfeitForMatch = logsForfeit.filter((l) => {
+          const args = (l as { args?: { matchId?: bigint } }).args;
+          return args?.matchId === matchId;
+        });
+        const lastForfeit = forfeitForMatch[forfeitForMatch.length - 1] as
+          | { args?: { winner?: Address; pot?: bigint } }
+          | undefined;
+
+        if (!cancelled && lastForfeit?.args?.winner) {
+          setResolution({
+            kind: 'forfeit',
+            winner: lastForfeit.args.winner,
+            pot: lastForfeit.args.pot,
+          });
+        } else if (!cancelled) {
+          setResolution(null);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setResolution(null);
+        setResolutionError((e as Error).message);
+      }
+    }
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [chainId, matchId, publicClient]);
 
   if (!user || matchId === null) return null;
 
@@ -84,13 +246,24 @@ export default function BattlePage({ params }: { params: Promise<{ id: string }>
     : null;
   const secretForThisPlayer = secret && address && secret.player.toLowerCase() === (address as string).toLowerCase();
   const myRevealed = isCreator ? matchInfo.revealedCreator : isOpponent ? matchInfo.revealedOpponent : false;
+  const hasWinner = Boolean(resolution?.winner);
+  const iWon = hasWinner && address && resolution!.winner.toLowerCase() === (address as string).toLowerCase();
 
   return (
     <div className="min-h-screen bg-gray-950">
       <Header />
 
       <main className="mx-auto max-w-3xl px-4 py-8 space-y-8">
-        <div className="rounded-2xl border border-gray-800 bg-gray-900 p-6 space-y-3">
+        <div
+          className={[
+            'rounded-2xl border p-6 space-y-3',
+            hasWinner
+              ? iWon
+                ? 'border-yellow-500 bg-gradient-to-br from-yellow-950 to-gray-900'
+                : 'border-red-700 bg-gradient-to-br from-red-950 to-gray-900'
+              : 'border-gray-800 bg-gray-900',
+          ].join(' ')}
+        >
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold text-white">Match #{matchId.toString()}</h1>
@@ -103,6 +276,32 @@ export default function BattlePage({ params }: { params: Promise<{ id: string }>
               </div>
               <div className="text-xs text-gray-500">Rounds: {matchInfo.config.rounds}</div>
             </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-200">
+            <div className="text-xs text-gray-500">Result</div>
+            {resolutionError ? (
+              <div className="text-gray-400">{resolutionError}</div>
+            ) : resolution ? (
+              <div className="font-bold">
+                {iWon ? 'You won' : `Winner: ${shortAddr(resolution.winner)}`}
+                {resolution.kind === 'forfeit' && <span className="ml-2 text-xs text-red-300">(forfeit)</span>}
+                {resolution.pot !== undefined && (
+                  <span className="ml-2 text-yellow-300">
+                    — pot {formatUnits(resolution.pot, decimals)} {symbol}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="text-gray-400">Not resolved yet</div>
+            )}
+
+            {resolution?.winsCreator !== undefined && resolution?.winsOpponent !== undefined && (
+              <div className="mt-1 text-xs text-gray-400">
+                Score — creator: {resolution.winsCreator}, opponent: {resolution.winsOpponent}
+                {resolution.draws !== undefined ? `, draws: ${resolution.draws}` : ''}
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-sm text-gray-300">

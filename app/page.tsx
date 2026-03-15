@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import Header from '@/components/Header';
 import ConnectWallet from '@/components/ConnectWallet';
 import { useGameUser } from '@/hooks/useGameUser';
@@ -10,6 +11,7 @@ import { useAccount, useChainId, useReadContracts } from 'wagmi';
 import { getDuelGameAddress } from '@/lib/contracts/addresses';
 import DuelGameArtifact from '@/lib/abi/DuelGame.json';
 import { useGetMatchInfo, useNextMatchId } from '@/lib/contracts/duelGame';
+import { useMatchResolution } from '@/lib/contracts/duelGameResult';
 import type { Abi, Address } from 'viem';
 
 export default function Home() {
@@ -33,29 +35,41 @@ export default function Home() {
 
   if (!isConnected || !user) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-4 bg-gray-950">
-        <div className="text-center mb-10">
-          <div className="text-7xl mb-5">⚔️</div>
-          <h1 className="text-5xl font-bold text-white mb-3">Chain Cards</h1>
-          <p className="text-gray-400 text-lg max-w-sm mx-auto">
-            Duel Cards (V1) — connect your wallet to enter the arena.
-          </p>
-        </div>
-
-        <ConnectWallet />
-
-        <div className="mt-12 grid grid-cols-3 gap-6 text-center max-w-lg">
-          {[
-            { icon: '🃏', label: 'Commit lineup', sub: 'Hidden until reveal' },
-            { icon: '💰', label: 'Stake ERC20', sub: 'Approve once per stake' },
-            { icon: '⏳', label: 'Reveal on time', sub: 'Or risk forfeit' },
-          ].map((item) => (
-            <div key={item.label} className="rounded-xl border border-gray-800 bg-gray-900 p-4">
-              <div className="text-3xl mb-2">{item.icon}</div>
-              <div className="text-sm font-bold text-white">{item.label}</div>
-              <div className="text-xs text-gray-500 mt-0.5">{item.sub}</div>
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+        <div className="w-full max-w-xl">
+          <div className="rounded-2xl border border-gray-800 bg-gray-900 p-8 text-center">
+            <div className="flex justify-center mb-5">
+              <Image
+                src="/images/ChainCards.png"
+                alt="Chain Cards"
+                width={520}
+                height={160}
+                priority
+                className="h-auto w-[260px] sm:w-[340px]"
+              />
             </div>
-          ))}
+
+            <p className="text-gray-300 text-base sm:text-lg">
+              Connect your wallet to create or accept a challenge.
+            </p>
+
+            <div className="mt-6 flex justify-center">
+              <ConnectWallet />
+            </div>
+
+            <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
+              {[
+                { title: 'Commit', desc: 'Lineup stays hidden.' },
+                { title: 'Stake', desc: 'Approve ERC20 once.' },
+                { title: 'Reveal', desc: 'Before the deadline.' },
+              ].map((card) => (
+                <div key={card.title} className="rounded-xl border border-gray-800 bg-gray-950 p-4">
+                  <div className="text-sm font-bold text-white">{card.title}</div>
+                  <div className="text-xs text-gray-400 mt-1">{card.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -64,7 +78,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gray-950">
       <Header />
-      <main className="mx-auto max-w-5xl px-4 py-8 space-y-10">
+      <main className="mx-auto max-w-6xl px-4 py-8">
         <div className="rounded-2xl border border-purple-800 bg-gradient-to-br from-purple-950 to-gray-900 p-6 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-2xl font-bold text-white">Ready to battle?</h2>
@@ -78,70 +92,97 @@ export default function Home() {
           </Link>
         </div>
 
-        <section>
-          <h3 className="text-lg font-bold text-white mb-4">Open match by ID</h3>
-          <div className="rounded-xl border border-gray-800 bg-gray-900 p-5 flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-300 mb-2">matchId</label>
-              <input
-                value={openId}
-                onChange={(e) => setOpenId(e.target.value)}
-                placeholder="e.g. 1"
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none font-mono"
-              />
+        <div className="mt-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-4 rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-bold text-white">Open match</h3>
             </div>
-            <Link
-              href={openId ? `/bet/${openId}` : '#'}
-              className={[
-                'rounded-xl px-6 py-3 font-bold text-white transition-colors text-sm text-center',
-                openId ? 'bg-green-700 hover:bg-green-600' : 'bg-gray-700 cursor-not-allowed opacity-60',
-              ].join(' ')}
-              aria-disabled={!openId}
-              onClick={(e) => { if (!openId) e.preventDefault(); }}
-            >
-              Open
-            </Link>
-          </div>
-        </section>
-
-        <section>
-          <h3 className="text-lg font-bold text-white mb-4">My recent matches (this device)</h3>
-          {history.length === 0 ? (
-            <div className="rounded-xl border border-gray-800 bg-gray-900 p-8 text-center text-gray-500">
-              No local history yet. Create or accept a match, or open by matchId.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {history.map((item) => (
-                <RecentMatchRow
-                  key={item.matchId}
-                  matchId={BigInt(item.matchId)}
-                  role={item.role}
+            <div className="mt-4 flex flex-col gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Match ID: </label>
+                <input
+                  value={openId}
+                  onChange={(e) => setOpenId(e.target.value)}
+                  placeholder="e.g. 1"
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none font-mono"
                 />
-              ))}
+              </div>
+              <Link
+                href={openId ? `/bet/${openId}` : '#'}
+                className={[
+                  'rounded-xl px-6 py-3 font-bold text-white transition-colors text-sm text-center',
+                  openId ? 'bg-green-700 hover:bg-green-600' : 'bg-gray-700 cursor-not-allowed opacity-60',
+                ].join(' ')}
+                aria-disabled={!openId}
+                onClick={(e) => {
+                  if (!openId) e.preventDefault();
+                }}
+              >
+                Open
+              </Link>
             </div>
-          )}
-        </section>
+          </div>
 
-        <section>
-          <h3 className="text-lg font-bold text-white mb-4">Recent open challenges (on-chain)</h3>
-          <RecentOpenChallenges />
-        </section>
+          <div className="lg:col-span-8 rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-bold text-white">My recent matches</h3>
+            </div>
+            <div className="mt-4">
+              {history.length === 0 ? (
+                <div className="rounded-xl border border-gray-800 bg-gray-950 p-8 text-center text-gray-500">
+                  No local history yet. Create or accept a match, or open by matchId.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {history.map((item) => (
+                    <RecentMatchRow key={item.matchId} matchId={BigInt(item.matchId)} role={item.role} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="lg:col-span-12 rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-bold text-white">Open challenges</h3>
+            </div>
+            <div className="mt-4">
+              <RecentOpenChallenges />
+            </div>
+          </div>
+        </div>
       </main>
     </div>
   );
 }
 
 function RecentMatchRow({ matchId, role }: { matchId: bigint; role: 'creator' | 'opponent' }) {
+  const { address } = useAccount();
   const { matchInfo } = useGetMatchInfo(matchId);
-  const status =
-    !matchInfo
-      ? 'Loading…'
-      : matchInfo.opponent === '0x0000000000000000000000000000000000000000'
-      ? 'Open'
-      : !matchInfo.revealedCreator || !matchInfo.revealedOpponent
-      ? 'Waiting reveal'
-      : 'Revealed';
+
+  const hasOpponent =
+    Boolean(matchInfo) &&
+    matchInfo!.opponent !== '0x0000000000000000000000000000000000000000';
+
+  const shouldResolve = Boolean(matchInfo?.revealedCreator && matchInfo?.revealedOpponent);
+  const { resolution, iWon, loading: resolutionLoading, error: resolutionError } = useMatchResolution({
+    matchId,
+    enabled: shouldResolve,
+  });
+
+  const status = (() => {
+    if (!matchInfo) return { label: 'Loading…', color: 'text-gray-400' };
+    if (!hasOpponent) return { label: 'Open', color: 'text-green-300' };
+    if (resolution?.winner && address) {
+      return { label: iWon ? 'Won' : 'Lost', color: iWon ? 'text-yellow-300' : 'text-red-300' };
+    }
+    if (!matchInfo.revealedCreator || !matchInfo.revealedOpponent) {
+      return { label: 'Waiting reveal', color: 'text-yellow-300' };
+    }
+    if (resolutionLoading) return { label: 'Resolving…', color: 'text-gray-300' };
+    if (resolutionError) return { label: 'Revealed', color: 'text-gray-300' };
+    return { label: 'Revealed', color: 'text-gray-300' };
+  })();
 
   const href =
     matchInfo && matchInfo.opponent !== '0x0000000000000000000000000000000000000000'
@@ -160,7 +201,9 @@ function RecentMatchRow({ matchId, role }: { matchId: bigint; role: 'creator' | 
         </div>
       </div>
       <div className="shrink-0 text-right">
-        <div className="text-sm font-bold text-yellow-400">{status}</div>
+        <div className={['text-sm font-bold', status.color].join(' ')}>
+          {status.label}
+        </div>
       </div>
     </Link>
   );

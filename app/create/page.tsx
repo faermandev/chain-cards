@@ -42,6 +42,7 @@ export default function CreateBetPage() {
   const [useElementAdvantage, setUseElementAdvantage] = useState(true);
   const [useTotalStatsTiebreaker, setUseTotalStatsTiebreaker] = useState(true);
   const [elementalMultiplierBps, setElementalMultiplierBps] = useState(15000);
+  const [multiplierInput, setMultiplierInput] = useState('1.5');
   const [error, setError] = useState('');
   const [secretSavedFor, setSecretSavedFor] = useState<bigint | null>(null);
   const [predictedMatchIdForTx, setPredictedMatchIdForTx] = useState<bigint | null>(null);
@@ -109,6 +110,12 @@ export default function CreateBetPage() {
     setSelected(Array.from({ length: rounds }, () => null));
     setActiveRound(0);
   }, [rounds]);
+
+  useEffect(() => {
+    const x = elementalMultiplierBps / 10_000;
+    const s = x.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+    setMultiplierInput(s);
+  }, []);
 
   function handleChange(round: number, cardId: bigint | null) {
     setSelected((prev) => {
@@ -300,15 +307,24 @@ export default function CreateBetPage() {
               Total-stats tiebreaker
             </label>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Element multiplier (bps)</label>
+              <label className="block text-xs text-gray-500 mb-1">Element multiplier (e.g. 1.5×)</label>
               <input
-                type="number"
-                min={10000}
-                max={30000}
-                value={elementalMultiplierBps}
-                onChange={(e) => setElementalMultiplierBps(Number(e.target.value))}
+                type="text"
+                inputMode="decimal"
+                value={multiplierInput}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setMultiplierInput(raw);
+                  const normalized = raw.replace(',', '.');
+                  const n = Number(normalized);
+                  if (!Number.isFinite(n) || n <= 0) return;
+                  setElementalMultiplierBps(Math.round(n * 10_000));
+                }}
                 className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none"
               />
+              <div className="mt-1 text-[11px] text-gray-500">
+                On-chain format: {elementalMultiplierBps} bps
+              </div>
             </div>
           </div>
         </div>

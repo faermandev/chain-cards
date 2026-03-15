@@ -150,12 +150,12 @@ export default function CardSelector({
 
   function pickCard(cardId: bigint) {
     const alreadyInOtherRound = selected.some(
-      (s, i) => s === cardId && i !== activeRound
+      (s, i) => (s ?? null) === cardId && i !== activeRound
     );
     if (alreadyInOtherRound) return; // card already used in another round
 
     // toggle off if same card clicked
-    if (selected[activeRound] === cardId) {
+    if ((selected[activeRound] ?? null) === cardId) {
       onChange(activeRound, null);
     } else {
       onChange(activeRound, cardId);
@@ -167,7 +167,7 @@ export default function CardSelector({
       {/* Round tabs */}
       <div className="flex gap-2">
         {roundLabels.map((label, i) => {
-          const cardId = selected[i];
+          const cardId = selected[i] ?? null;
           return (
             <button
               key={i}
@@ -196,8 +196,8 @@ export default function CardSelector({
         </p>
         <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
           {effectiveCards.map((cardId, idx) => {
-            const isSelectedHere = selected[activeRound] === cardId;
-            const isUsedElsewhere = selected.some((s, i) => s === cardId && i !== activeRound);
+            const isSelectedHere = (selected[activeRound] ?? null) === cardId;
+            const isUsedElsewhere = selected.some((s, i) => (s ?? null) === cardId && i !== activeRound);
             const exists = existsReads.data?.[idx]?.result as boolean | undefined;
             const stats = normalizeStats(statsReads.data?.[idx]?.result as unknown);
             return (
